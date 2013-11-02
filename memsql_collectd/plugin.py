@@ -35,7 +35,8 @@ MEMSQL_DATA.config = _AttrDict(
     user='root',
     password='',
     database='dashboard',
-    memsqlnode=None
+    memsqlnode=None,
+    prefix=None
 )
 
 ###################################
@@ -232,8 +233,9 @@ def cache_value(new_value, data_source_name, data_source_type, collectd_sample, 
     new_row = AnalyticsRow(
         int(collectd_sample.time),
         new_value,
-        collectd_sample.host,  # instance_id
-        collectd_sample.plugin,  # alpha...
+        collectd_sample.host,       # instance_id
+        data.config.prefix,         # alpha... (None's will be filtered)
+        collectd_sample.plugin,
         collectd_sample.plugin_instance,
         collectd_sample.type,
         collectd_sample.type_instance,
