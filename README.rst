@@ -11,7 +11,9 @@ Install
 
     pip install memsql-collectd
 
-Then add the following plugin to your collectd configuration:
+Then add the following plugin to your collectd configuration[1]_:
+
+.. [1] The collectd config file may be found at /etc/collectd.conf or /etc/collectd/collectd.conf if collectd was installed through a package manager.
 
 .. code:: xml
 
