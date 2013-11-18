@@ -4,12 +4,13 @@ except:
     pass
 
 from memsql.common.random_aggregator_pool import RandomAggregatorPool
-from memsql_collectd.analytics import AnalyticsCache, AnalyticsRow
 from memsql_collectd import cluster
+from memsql_collectd.analytics import AnalyticsCache, AnalyticsRow
 from wraptor.decorators import throttle
+import math
+import re
 import threading
 import time
-import math
 
 # This is a data structure shared by every callback. We store all the
 # configuration and globals in it.
@@ -26,7 +27,7 @@ class _AttrDict(dict):
 MEMSQL_DATA = _AttrDict(
     typesdb={},
     values_cache=AnalyticsCache(),
-    node=None
+    node=None,
 )
 
 MEMSQL_DATA.config = _AttrDict(
@@ -36,7 +37,9 @@ MEMSQL_DATA.config = _AttrDict(
     password='',
     database='dashboard',
     memsqlnode=None,
-    prefix=None
+    prefix=None,
+    blacklist=[],
+    disablederive=None,
 )
 
 ###################################
@@ -44,15 +47,18 @@ MEMSQL_DATA.config = _AttrDict(
 
 def memsql_config(config, data):
     """ Handle configuring collectd-memsql. """
-    parsed_config = {}
+    parsed_config = {'blacklist': []}
     for child in config.children:
         key = child.key.lower()
         val = child.values[0]
-        if isinstance(val, (str, unicode)) and val.lower() in 'yes,true,on'.split(','):
-            val = True
-        elif isinstance(val, (str, unicode)) and val.lower() in 'no,false,off'.split(','):
-            val = False
-        parsed_config[key] = val
+        if key == 'blacklist':
+            parsed_config['blacklist'].append(val)
+        else:
+            if isinstance(val, (str, unicode)) and val.lower() in 'yes,true,on'.split(','):
+                val = True
+            elif isinstance(val, (str, unicode)) and val.lower() in 'no,false,off'.split(','):
+                val = False
+            parsed_config[key] = val
 
     for config_key in data.config:
         if config_key in parsed_config:
@@ -68,6 +74,8 @@ def memsql_init(data):
     assert len(data.typesdb) > 0, 'At least 1 TypesDB file path must be specified'
     assert data.config.host is not None, 'MemSQL host is not defined'
     assert data.config.port is not None, 'MemSQL port is not defined'
+    for banned in data.config.blacklist:
+        assert ' ' not in banned
 
     collectd.info('Initializing collectd-memsql with %s:%s' % (data.config.host, data.config.port))
 
@@ -79,6 +87,8 @@ def memsql_init(data):
         password=data.config.password,
         database=data.config.database
     )
+
+    data.config.blacklist = _compile_blacklist_re(data.config.blacklist)
 
     # initialize the flushing thread
     data.flusher = FlushWorker(data)
@@ -226,27 +236,61 @@ def memsql_parse_types_file(path, data):
 
     f.close()
 
+
+def _compile_blacklist_re(blacklist):
+    """Given a list of banned classifiers, like ['cpu.*', '*.r-kelly', '*carl*.*carl*'],
+       return a regular expression which matches all strings which have prefixes in this
+       list (where * is interpreted as [^\.]*?)
+       In this case:
+       \A(
+         cpu\.[^\.]*?
+        |[^\.]*?\.r\-kelly
+        |[^\.]*?carl[^\.]*?\.[^\.]*?carl[^\.]*?
+       )[\.\Z].*
+    """
+    if not blacklist:
+        return re.compile(r'.\A')  # match nothing
+    return re.compile(r'\A(' +
+        '|'.join(re.escape(banned).replace(r'\*', r'[^\.]*?') for banned in blacklist)
+        + r')(\.|\Z)')
+
+def _blacklisted(data, *classifier):
+    classifier = '.'.join(filter(None, classifier))
+    return data.config.blacklist.match(classifier)
+
+
 def cache_value(new_value, data_source_name, data_source_type, collectd_sample, data):
     """ Cache a new value into the analytics cache.  Handles converting
     COUNTER and DERIVE types.
     """
-    new_row = AnalyticsRow(
-        int(collectd_sample.time),
-        new_value,
-        collectd_sample.host,       # instance_id
+    classifier = [
         data.config.prefix,         # alpha... (None's will be filtered)
         collectd_sample.plugin,
         collectd_sample.plugin_instance,
         collectd_sample.type,
         collectd_sample.type_instance,
-        data_source_name
+        data_source_name,
+    ]
+    if _blacklisted(data, *classifier):
+        return
+    new_row = AnalyticsRow(
+        int(collectd_sample.time),
+        new_value,
+        collectd_sample.host,       # instance_id
+        *classifier
     )
 
     previous_row = data.values_cache.swap_row(new_row)
 
+    if data_source_type not in ['ABSOLUTE', 'COUNTER', 'DERIVE', 'GAUGE']:
+        collectd.info("MemSQL: Undefined data source %s" % data_source_type)
+        return
+
     # special case counter and derive since we only care about the
-    # "difference" between their values (rather than their actual value)
-    if (data_source_type == 'COUNTER' or data_source_type == 'DERIVE'):
+    # *difference* between their values (rather than their actual value)
+    if data_source_type in ['ABSOLUTE', 'GAUGE'] or data.config.disablederive:
+        new_row.value = new_value
+    elif data_source_type in ['COUNTER', 'DERIVE']:
         if previous_row is None:
             return
 
@@ -256,7 +300,7 @@ def cache_value(new_value, data_source_name, data_source_type, collectd_sample, 
         time_delta = float(max(1, new_row.created - previous_row.created))
 
         # The following formula handles wrapping COUNTER data types
-        # around since COUNTER's should never be negative.
+        # around since COUNTERs should never be negative.
         # Taken from: https://collectd.org/wiki/index.php/Data_source
         if data_source_type == 'COUNTER' and new_value < old_value:
             if old_value < 2 ** 32:
@@ -272,12 +316,6 @@ def cache_value(new_value, data_source_name, data_source_type, collectd_sample, 
         else:
             # the default wrap-around formula
             new_row.value = (new_value - old_value) / time_delta
-
-    elif data_source_type == 'GAUGE' or data_source_name == 'ABSOLUTE':
-        new_row.value = new_value
-
-    else:
-        collectd.info("MemSQL: Undefined data source %s" % data_source_type)
 
 ######################
 ## Register callbacks
