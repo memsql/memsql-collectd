@@ -38,8 +38,9 @@ MEMSQL_DATA.config = _AttrDict(
     database='dashboard',
     memsqlnode=None,
     prefix=None,
-    blacklist=[],
-    disablederive=None,
+    blacklist=set(),
+    dfblacklist=True,
+    derive=True,
 )
 
 ###################################
@@ -47,12 +48,12 @@ MEMSQL_DATA.config = _AttrDict(
 
 def memsql_config(config, data):
     """ Handle configuring collectd-memsql. """
-    parsed_config = {'blacklist': []}
+    parsed_config = {'blacklist': set()}
     for child in config.children:
         key = child.key.lower()
         val = child.values[0]
         if key == 'blacklist':
-            parsed_config['blacklist'].append(val)
+            parsed_config['blacklist'].add(val)
         else:
             if isinstance(val, (str, unicode)) and val.lower() in 'yes,true,on'.split(','):
                 val = True
@@ -61,7 +62,9 @@ def memsql_config(config, data):
             parsed_config[key] = val
 
     for config_key in data.config:
-        if config_key in parsed_config:
+        if config_key == 'blacklist':
+            data.config['blacklist'] |= parsed_config['blacklist']
+        elif config_key in parsed_config:
             data.config[config_key] = parsed_config[config_key]
 
     if 'typesdb' in parsed_config:
@@ -74,6 +77,8 @@ def memsql_init(data):
     assert len(data.typesdb) > 0, 'At least 1 TypesDB file path must be specified'
     assert data.config.host is not None, 'MemSQL host is not defined'
     assert data.config.port is not None, 'MemSQL port is not defined'
+    if data.config.dfblacklist:
+        data.config.blacklist |= set(['df.dev', 'df.run', 'df.run-lock', 'df.run-shm', 'df.proc'])
     for banned in data.config.blacklist:
         assert ' ' not in banned
 
@@ -288,7 +293,7 @@ def cache_value(new_value, data_source_name, data_source_type, collectd_sample, 
 
     # special case counter and derive since we only care about the
     # *difference* between their values (rather than their actual value)
-    if data_source_type in ['ABSOLUTE', 'GAUGE'] or data.config.disablederive:
+    if data_source_type in ['ABSOLUTE', 'GAUGE'] or not data.config.derive:
         new_row.value = new_value
     elif data_source_type in ['COUNTER', 'DERIVE']:
         if previous_row is None:
