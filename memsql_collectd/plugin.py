@@ -78,7 +78,7 @@ def memsql_init(data):
     assert data.config.host is not None, 'MemSQL host is not defined'
     assert data.config.port is not None, 'MemSQL port is not defined'
     if data.config.dfblacklist:
-        data.config.blacklist |= set(['df.dev', 'df.run', 'df.run-lock', 'df.run-shm', 'df.proc'])
+        data.config.blacklist |= set(['df.dev', 'df.dev-shm', 'df.run', 'df.run-lock', 'df.run-shm', 'df.proc'])
     for banned in data.config.blacklist:
         assert ' ' not in banned
 
