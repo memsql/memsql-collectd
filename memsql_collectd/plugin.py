@@ -3,6 +3,7 @@ try:
 except:
     pass
 
+from memsql_collectd import __version__
 from memsql.common.random_aggregator_pool import RandomAggregatorPool
 from memsql_collectd import cluster
 from memsql_collectd.analytics import AnalyticsCache, AnalyticsRow
@@ -83,7 +84,7 @@ def memsql_init(data):
     for banned in data.config.blacklist:
         assert ' ' not in banned
 
-    collectd.info('Initializing collectd-memsql with %s:%s' % (data.config.host, data.config.port))
+    collectd.info('Initializing collectd-memsql %s with %s:%s' % (__version__, data.config.host, data.config.port))
 
     # initialize the aggregator pool
     data.pool = RandomAggregatorPool(
