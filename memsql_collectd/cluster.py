@@ -11,7 +11,12 @@ COUNTER_STATUS_VARIABLES = [
     "Rows_affected_by_writes",
     "Rows_returned_by_reads",
     "Successful_write_queries",
-    "Successful_read_queries"
+    "Successful_read_queries",
+    "Failed_read_queries",
+    "Failed_write_queries",
+    "Execution_time_of_reads",
+    "Execution_time_of_write",
+    "Row_lock_wait_time"
 ]
 
 def find_node(connection_pool):
