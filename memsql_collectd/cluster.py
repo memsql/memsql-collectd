@@ -19,16 +19,21 @@ COUNTER_STATUS_VARIABLES = [
     "Row_lock_wait_time"
 ]
 
-def find_node(connection_pool):
+def find_node(connection_pool, possible_hostname=None):
     addresses = _network_addresses()
-    addresses_sql = ','.join(["'%s'" % address for address in addresses])
+
+    if possible_hostname is not None:
+        addresses.append(socket.gethostbyname(possible_hostname))
+
+    # Select the matching host from the Dashboard node table that match any
+    # of our ips. Hopefully this resolves to a single node.
     with connection_pool.connect() as conn:
         node_row = conn.get('''
             SELECT id, host, port
             FROM nodes
             WHERE nodes.host IN (%s)
             ORDER BY host, port LIMIT 1
-        ''' % addresses_sql)
+        ''' % ','.join("'%s'" % addr for addr in addresses))
 
     if node_row is None:
         # we may be the master node, and the dashboard may be pointing at 127.0.0.1

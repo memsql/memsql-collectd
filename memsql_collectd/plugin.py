@@ -41,6 +41,7 @@ MEMSQL_DATA.config = _AttrDict(
     blacklist=set(),
     dfblacklist=True,
     derive=True,
+    clusterhostname=None,
 )
 
 ###################################
@@ -198,7 +199,7 @@ def throttled_update_alias(data, collectd_sample):
 
 @throttle(60)
 def throttled_find_node(data):
-    node = cluster.find_node(data.pool)
+    node = cluster.find_node(data.pool, data.config.clusterhostname)
     if data.node is not None and node is not None:
         # merge node details
         data.node.update_from_node(node)
