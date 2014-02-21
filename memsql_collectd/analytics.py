@@ -113,11 +113,14 @@ class AnalyticsCache(object):
                 while len(flushing):
                     batch, flushing = flushing[:128], flushing[128:]
 
-                    row_values = [row.analytics_values() for row in batch]
+                    row_values = sorted((row.analytics_values() for row in batch), key=lambda x: ('%s%s' % (x[0], x[1])))
                     query_params = sum(row_values, ())
                     values = ','.join(ANALYTICS_TEMPLATE * len(row_values))
 
-                    conn.execute("INSERT INTO analytics (%s) VALUES %s" % (columns, values), *query_params)
+                    conn.execute('''
+                        INSERT INTO analytics (%s) VALUES %s
+                        ON DUPLICATE KEY UPDATE value=value
+                    ''' % (columns, values), *query_params)
 
     @throttle(60)
     def garbage_collect_pending(self):
