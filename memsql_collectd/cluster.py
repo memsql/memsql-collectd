@@ -19,7 +19,28 @@ COUNTER_STATUS_VARIABLES = [
     "Row_lock_wait_time"
 ]
 
-def find_node(connection_pool, possible_hostname=None):
+def find_node(connection_pool, possible_hostname=None, memsqlnode=None):
+    if isinstance(memsqlnode, basestring):
+        return find_node_by_name(connection_pool, memsqlnode)
+    else:
+        return find_node_by_address(connection_pool, possible_hostname)
+
+def find_node_by_name(connection_pool, memsqlnode):
+    """ Look up a node using the host:port specifier in memsqlnode """
+    host, port = memsqlnode.split(':') if ':' in memsqlnode else (memsqlnode, '%')
+
+    with connection_pool.connect() as conn:
+        node_row = conn.get('''
+            SELECT id, host, port
+            FROM nodes
+            WHERE nodes.host = %s AND nodes.port LIKE %s
+            ORDER BY host, port LIMIT 1
+        ''', host, port)
+
+    if node_row is not None:
+        return Node(node_row)
+
+def find_node_by_address(connection_pool, possible_hostname=None):
     addresses = _network_addresses()
 
     if possible_hostname is not None:

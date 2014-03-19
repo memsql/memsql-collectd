@@ -208,7 +208,7 @@ def throttled_update_alias(data, collectd_sample):
 
 @throttle(60)
 def throttled_find_node(data):
-    node = cluster.find_node(data.pool, data.config.clusterhostname)
+    node = cluster.find_node(data.pool, data.config.clusterhostname, data.config.memsqlnode)
     if data.node is not None and node is not None:
         # merge node details
         data.node.update_from_node(node)
