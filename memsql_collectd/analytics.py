@@ -7,7 +7,7 @@ from itertools import repeat, chain, ifilter, islice, tee
 from memsql_collectd import util
 
 CLASSIFIERS = [ "instance_id", "alpha", "beta", "gamma", "delta", "epsilon" ]
-CLASSIFIER_COLUMNS = CLASSIFIERS + [ "classifier", "id" ]
+CLASSIFIER_COLUMNS = CLASSIFIERS + [ "classifier", "id", "last_updated" ]
 
 ANALYTICS_COLUMNS = [ "classifier_id", "created", "value" ]
 ANALYTICS_TEMPLATE = ["(%s, %s, %s)"]
@@ -131,6 +131,7 @@ class AnalyticsCache(object):
             self._pending = [r for r in self._pending if r.created > (now - 360)]
 
     def record_classifiers(self, agg_pool, analytic_rows):
+        now = (util.sql_utcnow(),)  # 1-element tuple!
         value_template = ['(' + ','.join(['%s'] * len(CLASSIFIER_COLUMNS)) + ')']
         columns = ','.join(CLASSIFIER_COLUMNS)
 
@@ -144,16 +145,11 @@ class AnalyticsCache(object):
             with agg_pool.connect_master() as master_conn:
                 while len(pending):
                     batch, pending = pending[:50], pending[50:]
-
-                    row_values = [row.classifier_values() for row in batch]
-                    query_params = sum(row_values, ())
+                    row_values = [tuple(row.classifier_values()) + now for row in batch]
+                    query_params = sum(row_values, ()) + now
                     values = ','.join(value_template * len(row_values))
-
-                    master_conn.execute('''
-                        INSERT INTO classifiers (%s)
-                        VALUES %s
-                        ON DUPLICATE KEY UPDATE id=VALUES(id)
-                    ''' % (columns, values), *query_params)
+                    sql = "INSERT INTO classifiers (%s) VALUES %s ON DUPLICATE KEY UPDATE last_updated=%%s" % (columns, values)
+                    master_conn.execute(sql, *query_params)
 
     @throttle(60 * 5)
     def garbage_collect_classifiers(self):

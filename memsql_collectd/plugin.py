@@ -5,7 +5,7 @@ except:
 
 from memsql_collectd import __version__
 from memsql.common.random_aggregator_pool import RandomAggregatorPool
-from memsql_collectd import cluster
+from memsql_collectd import cluster, util
 from memsql_collectd.analytics import AnalyticsCache, AnalyticsRow
 from wraptor.decorators import throttle
 import math
@@ -131,15 +131,23 @@ def memsql_read(data):
 @throttle(60)
 def memsql_read_facts(data):
     if data.node.alias is not None:
-        variables = list(sum(data.node.variables(), ()))
+        now = util.sql_utcnow()
+        variables = list(data.node.variables())
+        num_rows = len(variables)
+        variables = sum([
+            [now, data.node.alias, "memsql", "variables", gamma, value]
+            for gamma, value in variables
+        ], [])
+        variables.append(now)
 
-        if len(variables) > 0:
-            tmpl = ['("%s", "memsql", "variables", %%s, %%s)' % data.node.alias]
+        if num_rows > 0:
+            tmpl = ["(%s, %s, %s, %s, %s, %s)"]
             with data.pool.connect() as conn:
-                conn.execute('''
-                    INSERT INTO facts (instance_id, alpha, beta, gamma, value) VALUES %s
-                    ON DUPLICATE KEY UPDATE value = VALUES(value)
-                ''' % ",".join(tmpl * (len(variables) / 2)), *variables)
+                sql = '''
+                    INSERT INTO facts (last_updated, instance_id, alpha, beta, gamma, value) VALUES %s
+                    ON DUPLICATE KEY UPDATE last_updated=%%s
+                ''' % ",".join(tmpl * num_rows)
+                conn.execute(sql, *variables)
 
 def memsql_write(collectd_sample, data):
     """ Write handler for collectd.
