@@ -27,7 +27,6 @@ class AnalyticsRow(object):
         self.instance_id = classifier[0]
 
         self.value = None
-        self._iso_timestamp = None
         self._classifier_id = None
 
         self.classifier = tuple(
@@ -49,12 +48,6 @@ class AnalyticsRow(object):
         return self._classifier_id
 
     @property
-    def iso_timestamp(self):
-        if self._iso_timestamp is None:
-            self._iso_timestamp = datetime.utcfromtimestamp(int(self.created)).strftime('%Y-%m-%d %H:%M:%S')
-        return self._iso_timestamp
-
-    @property
     def joined_classifier(self):
         return '.'.join([x for x in self.classifier if x != ''])
 
@@ -64,7 +57,7 @@ class AnalyticsRow(object):
 
     def analytics_values(self):
         """ Returns a tuple for inserting into the analytics table. """
-        return (self.classifier_id, self.iso_timestamp, self.value)
+        return (self.classifier_id, int(self.created), self.value)
 
     def valid(self):
         """ Validates that the value of this row is a valid value (ie. not None and not NaN) """
@@ -119,7 +112,7 @@ class AnalyticsCache(object):
 
                     conn.execute('''
                         INSERT INTO analytics (%s) VALUES %s
-                        ON DUPLICATE KEY UPDATE value=value
+                        ON DUPLICATE KEY UPDATE value=VALUES(value)
                     ''' % (columns, values), *query_params)
 
     @throttle(60)
