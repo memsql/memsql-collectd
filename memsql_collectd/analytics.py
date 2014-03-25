@@ -112,7 +112,7 @@ class AnalyticsCache(object):
 
                     conn.execute('''
                         INSERT INTO analytics (%s) VALUES %s
-                        ON DUPLICATE KEY UPDATE value=VALUES(value)
+                        ON DUPLICATE KEY UPDATE value=value
                     ''' % (columns, values), *query_params)
 
     @throttle(60)
