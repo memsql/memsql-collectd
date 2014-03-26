@@ -21,5 +21,5 @@ setup(
     ],
     packages=[ 'memsql_collectd' ],
     zip_safe=False,
-    install_requires=['wraptor==0.5.0', 'netifaces==0.8', 'memsql==2.9.0']
+    install_requires=['wraptor==0.5.0', 'netifaces==0.8', 'memsql==2.11.0']
 )
