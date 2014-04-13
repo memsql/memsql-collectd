@@ -145,7 +145,7 @@ def memsql_read_facts(data):
             with data.pool.connect() as conn:
                 sql = '''
                     INSERT INTO facts (last_updated, instance_id, alpha, beta, gamma, value) VALUES %s
-                    ON DUPLICATE KEY UPDATE last_updated=%%s
+                    ON DUPLICATE KEY UPDATE last_updated=%%s, value=VALUES(value)
                 ''' % ",".join(tmpl * num_rows)
                 conn.execute(sql, *variables)
 
