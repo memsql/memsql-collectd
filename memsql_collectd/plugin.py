@@ -13,6 +13,9 @@ import re
 import threading
 import time
 
+STATS_REPORT_INTERVAL = 5
+
+
 # This is a data structure shared by every callback. We store all the
 # configuration and globals in it.
 class _AttrDict(dict):
@@ -29,6 +32,7 @@ MEMSQL_DATA = _AttrDict(
     typesdb={},
     values_cache=AnalyticsCache(),
     node=None,
+    counters=_AttrDict(stats=0, blacklisted=0, whitelisted=0, last_report=0)
 )
 
 MEMSQL_DATA.config = _AttrDict(
@@ -40,6 +44,7 @@ MEMSQL_DATA.config = _AttrDict(
     memsqlnode=None,
     prefix=None,
     blacklist=set(),
+    whitelist=set(),
     dfblacklist=True,
     derive=True,
     clusterhostname=None,
@@ -50,12 +55,15 @@ MEMSQL_DATA.config = _AttrDict(
 
 def memsql_config(config, data):
     """ Handle configuring collectd-memsql. """
-    parsed_config = {'blacklist': set()}
+    parsed_config = {
+        'blacklist': set(),
+        'whitelist': set()
+    }
     for child in config.children:
         key = child.key.lower()
         val = child.values[0]
-        if key == 'blacklist':
-            parsed_config['blacklist'].add(val)
+        if key in ('blacklist', 'whitelist'):
+            parsed_config[key].add(val)
         else:
             if isinstance(val, (str, unicode)) and val.lower() in 'yes,true,on'.split(','):
                 val = True
@@ -64,8 +72,8 @@ def memsql_config(config, data):
             parsed_config[key] = val
 
     for config_key in data.config:
-        if config_key == 'blacklist':
-            data.config['blacklist'] |= parsed_config['blacklist']
+        if config_key in ('blacklist', 'whitelist'):
+            data.config[config_key] |= parsed_config[config_key]
         elif config_key in parsed_config:
             data.config[config_key] = parsed_config[config_key]
 
@@ -95,7 +103,11 @@ def memsql_init(data):
         database=data.config.database
     )
 
-    data.config.blacklist = _compile_blacklist_re(data.config.blacklist)
+    data.config.blacklist = _compile_filter_re(data.config.blacklist)
+    data.config.whitelist = _compile_filter_re(data.config.whitelist)
+
+    collectd.debug('Blacklist pattern: /%s/ ' % data.config.blacklist.pattern)
+    collectd.debug('Whitelist pattern: /%s/ ' % data.config.whitelist.pattern)
 
     # initialize the flushing thread
     data.flusher = FlushWorker(data)
@@ -252,8 +264,8 @@ def memsql_parse_types_file(path, data):
     f.close()
 
 
-def _compile_blacklist_re(blacklist):
-    """Given a list of banned classifiers, like ['cpu.*', '*.r-kelly', '*carl*.*carl*'],
+def _compile_filter_re(filter_list):
+    """Given a list of classifiers, like ['cpu.*', '*.r-kelly', '*carl*.*carl*'],
        return a regular expression which matches all strings which have prefixes in this
        list (where * is interpreted as [^\.]*?)
        In this case:
@@ -263,21 +275,34 @@ def _compile_blacklist_re(blacklist):
         |[^\.]*?carl[^\.]*?\.[^\.]*?carl[^\.]*?
        )[\.\Z].*
     """
-    if not blacklist:
-        return re.compile(r'.\A')  # match nothing
+    if not filter_list:
+        return None
     return re.compile(r'\A(' +
-        '|'.join(re.escape(banned).replace(r'\*', r'[^\.]*?') for banned in blacklist)
+        '|'.join(re.escape(item).replace(r'\*', r'[^\.]*?') for item in filter_list)
         + r')(\.|\Z)')
 
-def _blacklisted(data, *classifier):
-    classifier = '.'.join(filter(None, classifier))
-    return data.config.blacklist.match(classifier)
+def _blacklisted(data, classifier_str):
+    return data.config.blacklist and data.config.blacklist.match(classifier_str)
+
+def _whitelisted(data, classifier_str):
+    return (not data.config.whitelist) or data.config.whitelist.match(classifier_str)
 
 
 def cache_value(new_value, data_source_name, data_source_type, collectd_sample, data):
     """ Cache a new value into the analytics cache.  Handles converting
     COUNTER and DERIVE types.
     """
+
+    data.counters.stats += 1
+    now = time.time()
+    if (now - data.counters.last_report > STATS_REPORT_INTERVAL):
+        data.counters.last_report = now
+        collectd.info("%d stats collected, %d excluded by whitelist, %d blacklisted" % (
+            data.counters.stats,
+            data.counters.whitelisted,
+            data.counters.blacklisted
+        ))
+
     classifier = [
         data.config.prefix,         # alpha... (None's will be filtered)
         collectd_sample.plugin,
@@ -286,8 +311,16 @@ def cache_value(new_value, data_source_name, data_source_type, collectd_sample, 
         collectd_sample.type_instance,
         data_source_name,
     ]
-    if _blacklisted(data, *classifier):
+    classifier_str = '.'.join(filter(None, classifier))
+
+    if not _whitelisted(data, classifier_str):
+        data.counters.whitelisted += 1
         return
+
+    if _blacklisted(data, classifier_str):
+        data.counters.blacklisted += 1
+        return
+
     new_row = AnalyticsRow(
         int(collectd_sample.time),
         new_value,
