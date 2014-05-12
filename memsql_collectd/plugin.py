@@ -106,9 +106,6 @@ def memsql_init(data):
     data.config.blacklist = _compile_filter_re(data.config.blacklist)
     data.config.whitelist = _compile_filter_re(data.config.whitelist)
 
-    collectd.debug('Blacklist pattern: /%s/ ' % data.config.blacklist.pattern)
-    collectd.debug('Whitelist pattern: /%s/ ' % data.config.whitelist.pattern)
-
     # initialize the flushing thread
     data.flusher = FlushWorker(data)
     data.flusher.start()
