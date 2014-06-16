@@ -12,6 +12,9 @@ import math
 import re
 import threading
 import time
+import os
+import subprocess
+import copy
 
 STATS_REPORT_INTERVAL = 5
 
@@ -51,7 +54,7 @@ MEMSQL_DATA.config = _AttrDict(
 )
 
 ###################################
-## Lifecycle functions
+# Lifecycle functions
 
 def memsql_config(config, data):
     """ Handle configuring collectd-memsql. """
@@ -110,6 +113,10 @@ def memsql_init(data):
     data.flusher = FlushWorker(data)
     data.flusher.start()
 
+    # initialize disk usage worker
+    data.disk_crawler = DiskUsageWorker(data)
+    data.disk_crawler.start()
+
 def memsql_shutdown(data):
     """ Handles terminating collectd-memsql. """
     collectd.info('Terminating collectd-memsql')
@@ -119,8 +126,11 @@ def memsql_shutdown(data):
     data.flusher.terminate()
     data.flusher.join()
 
+    data.disk_crawler.terminate()
+    data.disk_crawler.join()
+
 #########################
-## Read/Write functions
+# Read/Write functions
 
 def memsql_read(data):
     # if we don't have a data node AND we either havn't set memsqlnode, or memsql node is truthy
@@ -136,6 +146,7 @@ def memsql_read(data):
                 memsql_status.dispatch(type="counter", type_instance=name, values=[value])
 
         memsql_read_facts(data)
+        memsql_read_disk_info(data, memsql_status)
 
 @throttle(60)
 def memsql_read_facts(data):
@@ -157,6 +168,59 @@ def memsql_read_facts(data):
                     ON DUPLICATE KEY UPDATE last_updated=%%s, value=VALUES(value)
                 ''' % ",".join(tmpl * num_rows)
                 conn.execute(sql, *variables)
+
+@throttle(60)
+def memsql_read_disk_info(data, memsql_status):
+    memsql_dirs = data.node.directories()
+
+    data_dir = memsql_dirs.get('Data_directory', '')
+    dirs = {
+        'data': data_dir,
+        'segments': memsql_dirs.get('Segments_directory', os.path.join(data_dir, 'columns')),
+        'logs': memsql_dirs.get('Logs_directory', os.path.join(data_dir, 'logs')),
+        'snapshots': memsql_dirs.get('Snapshots_directory', os.path.join(data_dir, 'snapshots')),
+        'plancache': memsql_dirs.get('Plancache_directory', os.path.join(data_dir, 'plancache'))
+    }
+
+    for label, path in dirs.iteritems():
+        if not path or not os.path.exists(path) or not os.path.isdir(path):
+            collectd.debug('%s directory does not exist: (%s)' % (label, path))
+            del dirs[label]
+
+    if 'data' not in dirs or 'plancache' not in dirs:
+        collectd.debug("Can't find data or plancache directory.")
+        return
+
+    mounts = set()
+    total_used = 0
+    total_avail = 0
+    for label, path in dirs.iteritems():
+        paths = [path]
+        try:
+            # get columnar subdirs
+            if label == 'segments':
+                paths += os.listdir(path)
+
+            with open(os.devnull, 'w') as devnull:
+                p = subprocess.Popen(['df', '-k', '-P'] + paths, stderr=devnull, stdout=subprocess.PIPE)
+                out = p.communicate()[0]
+
+            for line in out.split('\n')[1:]:
+                fs, blocks, used, avail, percent, mount = line.strip().split(None, 5)
+                if mount not in mounts:
+                    mounts.add(mount)
+                    total_used += int(used) * 1024
+                    total_avail += int(avail) * 1024
+
+        except (OSError, IndexError, ValueError) as e:
+            collectd.debug(e.message)
+
+    memsql_status.dispatch(type_instance='used_storage_bytes', values=[total_used])
+    memsql_status.dispatch(type_instance='available_storage_bytes', values=[total_avail])
+
+    data.disk_crawler.update_dirs(dirs)
+    for label, size in data.disk_crawler.disk_usage().iteritems():
+        memsql_status.dispatch(type_instance=label + '_storage_bytes', values=[size])
 
 def memsql_write(collectd_sample, data):
     """ Write handler for collectd.
@@ -184,7 +248,62 @@ def memsql_write(collectd_sample, data):
         cache_value(value, value_type[0], value_type[1], collectd_sample, data)
 
 #########################
-## Flushing thread
+# Disk Usage thread
+
+class DiskUsageWorker(threading.Thread):
+    def __init__(self, data):
+        super(DiskUsageWorker, self).__init__()
+        self.data = data
+        self._stop = threading.Event()
+        self._disk_usage = {}
+        self._disk_usage_lock = threading.RLock()
+
+    def update_dirs(self, dirs):
+        with self._disk_usage_lock:
+            for label, path in dirs.iteritems():
+                self._disk_usage[label] = { 'path': path, 'bytes': None }
+            for label in self._disk_usage:
+                if label not in dirs:
+                    del self._disk_usage[label]
+
+    def disk_usage(self):
+        out = {}
+        with self._disk_usage_lock:
+            for label, info in self._disk_usage.iteritems():
+                if info['bytes'] is not None:
+                    out[label] = info['bytes']
+        return out
+
+    def run(self):
+        while not self._stop.isSet():
+            time.sleep(5)
+
+            with self._disk_usage_lock:
+                disk_usage = copy.deepcopy(self._disk_usage)
+
+            for label, info in disk_usage.iteritems():
+                try:
+                    with open(os.devnull, 'w') as devnull:
+                        p = subprocess.Popen(['du', '-k', '-s', info['path']], stderr=devnull, stdout=subprocess.PIPE)
+                        out = p.communicate()[0]
+
+                    size, _ = out.strip().split(None, 1)
+                    size = int(size) * 1024
+
+                    with self._disk_usage_lock:
+                        if label in self._disk_usage:
+                            self._disk_usage[label]['bytes'] = size
+                except (OSError, IndexError, ValueError) as e:
+                    collectd.info(e.message)
+                    with self._disk_usage_lock:
+                        if label in self._disk_usage:
+                            self._disk_usage[label]['bytes'] = None
+
+    def terminate(self):
+        self._stop.set()
+
+#########################
+# Flushing thread
 
 class FlushWorker(threading.Thread):
     def __init__(self, data):
@@ -208,7 +327,7 @@ class FlushWorker(threading.Thread):
         self._stop.set()
 
 #########################
-## Utility functions
+# Utility functions
 
 @throttle(60)
 def throttled_update_alias(data, collectd_sample):
@@ -259,7 +378,6 @@ def memsql_parse_types_file(path, data):
         types[type_name] = v
 
     f.close()
-
 
 def _compile_filter_re(filter_list):
     """Given a list of classifiers, like ['cpu.*', '*.r-kelly', '*carl*.*carl*'],
@@ -363,7 +481,7 @@ def cache_value(new_value, data_source_name, data_source_type, collectd_sample, 
             new_row.value = (new_value - old_value) / time_delta
 
 ######################
-## Register callbacks
+# Register callbacks
 
 try:
     collectd.register_config(memsql_config, MEMSQL_DATA)

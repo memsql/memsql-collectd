@@ -139,3 +139,10 @@ class Node(object):
             rows = conn.query('SHOW VARIABLES')
         for row in rows:
             yield (row.Variable_name, row.Value)
+        for name, path in self.directories().iteritems():
+            yield (name, path)
+
+    def directories(self):
+        with self.connect() as conn:
+            rows = conn.query("SHOW STATUS EXTENDED LIKE '%_directory'")
+        return dict([(row.Variable_name, row.Value) for row in rows])
