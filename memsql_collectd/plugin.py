@@ -15,9 +15,10 @@ import time
 import os
 import subprocess
 import copy
+import signal
+import traceback
 
 STATS_REPORT_INTERVAL = 5
-
 
 # This is a data structure shared by every callback. We store all the
 # configuration and globals in it.
@@ -85,6 +86,9 @@ def memsql_config(config, data):
 
 def memsql_init(data):
     """ Handles initializing collectd-memsql. """
+
+    # handle SIGCHLD normally for subprocesses
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
 
     # verify we have required params
     assert len(data.typesdb) > 0, 'At least 1 TypesDB file path must be specified'
@@ -182,13 +186,13 @@ def memsql_read_disk_info(data, memsql_status):
         'plancache': memsql_dirs.get('Plancache_directory', os.path.join(data_dir, 'plancache'))
     }
 
-    for label, path in dirs.iteritems():
+    for label in dirs.keys():
+        path = dirs[label]
         if not path or not os.path.exists(path) or not os.path.isdir(path):
-            collectd.debug('%s directory does not exist: (%s)' % (label, path))
             del dirs[label]
 
     if 'data' not in dirs or 'plancache' not in dirs:
-        collectd.debug("Can't find data or plancache directory.")
+        collectd.info("Can't find data or plancache directory.")
         return
 
     mounts = set()
@@ -205,7 +209,7 @@ def memsql_read_disk_info(data, memsql_status):
                 p = subprocess.Popen(['df', '-k', '-P'] + paths, stderr=devnull, stdout=subprocess.PIPE)
                 out = p.communicate()[0]
 
-            for line in out.split('\n')[1:]:
+            for line in out.strip().split('\n')[1:]:
                 fs, blocks, used, avail, percent, mount = line.strip().split(None, 5)
                 if mount not in mounts:
                     mounts.add(mount)
@@ -213,7 +217,8 @@ def memsql_read_disk_info(data, memsql_status):
                     total_avail += int(avail) * 1024
 
         except (OSError, IndexError, ValueError) as e:
-            collectd.debug(e.message)
+            collectd.info('Error in memsql_read_disk_info: ' + str(e))
+            collectd.info(traceback.format_exc())
 
     memsql_status.dispatch(type_instance='used_storage_bytes', values=[total_used])
     memsql_status.dispatch(type_instance='available_storage_bytes', values=[total_avail])
@@ -261,7 +266,10 @@ class DiskUsageWorker(threading.Thread):
     def update_dirs(self, dirs):
         with self._disk_usage_lock:
             for label, path in dirs.iteritems():
-                self._disk_usage[label] = { 'path': path, 'bytes': None }
+                if label in self._disk_usage:
+                    self._disk_usage[label]['path'] = path
+                else:
+                    self._disk_usage[label] = { 'path': path, 'bytes': None }
             for label in self._disk_usage:
                 if label not in dirs:
                     del self._disk_usage[label]
@@ -294,7 +302,8 @@ class DiskUsageWorker(threading.Thread):
                         if label in self._disk_usage:
                             self._disk_usage[label]['bytes'] = size
                 except (OSError, IndexError, ValueError) as e:
-                    collectd.info(e.message)
+                    collectd.info('Error in DiskUsageWorker: ' + str(e))
+                    collectd.info(traceback.format_exc())
                     with self._disk_usage_lock:
                         if label in self._disk_usage:
                             self._disk_usage[label]['bytes'] = None
