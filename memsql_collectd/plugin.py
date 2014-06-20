@@ -5,6 +5,7 @@ except:
 
 from memsql_collectd import __version__
 from memsql.common.random_aggregator_pool import RandomAggregatorPool
+from memsql.common.connection_pool import PoolConnectionException
 from memsql_collectd import cluster, util
 from memsql_collectd.analytics import AnalyticsCache, AnalyticsRow
 from wraptor.decorators import throttle
@@ -36,7 +37,8 @@ MEMSQL_DATA = _AttrDict(
     typesdb={},
     values_cache=AnalyticsCache(),
     node=None,
-    counters=_AttrDict(stats=0, blacklisted=0, whitelisted=0, last_report=0)
+    counters=_AttrDict(stats=0, blacklisted=0, whitelisted=0, last_report=0),
+    exiting=False
 )
 
 MEMSQL_DATA.config = _AttrDict(
@@ -113,6 +115,18 @@ def memsql_init(data):
     data.config.blacklist = _compile_filter_re(data.config.blacklist)
     data.config.whitelist = _compile_filter_re(data.config.whitelist)
 
+    try:
+        # initialize a memsql node here if we can
+        if data.config.memsqlnode or data.config.memsqlnode is None:
+            throttled_find_node(data)
+            if data.node is not None:
+                data.node.connect().close()
+
+        # initialize a pool connection
+        data.pool.connect().close()
+    except PoolConnectionException:
+        pass
+
     # initialize the flushing thread
     data.flusher = FlushWorker(data)
     data.flusher.start()
@@ -124,21 +138,29 @@ def memsql_init(data):
 def memsql_shutdown(data):
     """ Handles terminating collectd-memsql. """
     collectd.info('Terminating collectd-memsql')
+    data.exiting = True
 
+    collectd.info('Closing MemSQL connections...')
     data.pool.close()
 
+    collectd.info('Terminating threads...')
     data.flusher.terminate()
-    data.flusher.join()
-
     data.disk_crawler.terminate()
+
+    collectd.info('Waiting for data flusher to exit...')
+    data.flusher.join()
+    collectd.info('Waiting for disk crawler to exit...')
     data.disk_crawler.join()
 
 #########################
 # Read/Write functions
 
 def memsql_read(data):
-    # if we don't have a data node AND we either havn't set memsqlnode, or memsql node is truthy
-    if data.node is None and (data.config.memsqlnode or data.config.memsqlnode is None):
+    if data.exiting:
+        return
+
+    # update our node reference at least once every 60 seconds incase things change
+    if data.config.memsqlnode or data.config.memsqlnode is None:
         throttled_find_node(data)
 
     if data.node is not None:
@@ -232,6 +254,8 @@ def memsql_write(collectd_sample, data):
     This function is called per sample taken from every plugin.  It is
     parallelized among multiple threads by collectd.
     """
+    if data.exiting:
+        return
 
     if data.node is not None:
         throttled_update_alias(data, collectd_sample)
