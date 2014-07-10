@@ -310,6 +310,9 @@ class DiskUsageWorker(threading.Thread):
         while not self._stop.isSet():
             time.sleep(5)
 
+            if self.data.node is None:
+                continue
+
             with self._disk_usage_lock:
                 disk_usage = copy.deepcopy(self._disk_usage)
 
