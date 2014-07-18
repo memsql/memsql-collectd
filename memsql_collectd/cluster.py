@@ -1,7 +1,8 @@
 from netifaces import interfaces, ifaddresses, AF_INET
 import re
 import socket
-from memsql.common.connection_pool import ConnectionPool
+from memsql.common import connection_pool
+from memsql.common import database
 
 # Status variables specified in the following array will be sent to
 # collectd as COUNTERS as well as GAUGES.
@@ -29,13 +30,16 @@ def find_node_by_name(connection_pool, memsqlnode):
     """ Look up a node using the host:port specifier in memsqlnode """
     host, port = memsqlnode.split(':') if ':' in memsqlnode else (memsqlnode, '%')
 
-    with connection_pool.connect() as conn:
-        node_row = conn.get('''
-            SELECT id, host, port
-            FROM nodes
-            WHERE nodes.host = %s AND nodes.port LIKE %s
-            ORDER BY host, port LIMIT 1
-        ''', host, port)
+    try:
+        with connection_pool.connect() as conn:
+            node_row = conn.get('''
+                SELECT id, host, port
+                FROM nodes
+                WHERE nodes.host = %s AND nodes.port LIKE %s
+                ORDER BY host, port LIMIT 1
+            ''', host, port)
+    except (connection_pool.PoolConnectionException, database.DatabaseError):
+        return None
 
     if node_row is not None:
         return Node(node_row)
@@ -48,13 +52,16 @@ def find_node_by_address(connection_pool, possible_hostname=None):
 
     # Select the matching host from the Dashboard node table that match any
     # of our ips. Hopefully this resolves to a single node.
-    with connection_pool.connect() as conn:
-        node_row = conn.get('''
-            SELECT id, host, port
-            FROM nodes
-            WHERE nodes.host IN (%s)
-            ORDER BY host, port LIMIT 1
-        ''' % ','.join("'%s'" % addr for addr in addresses))
+    try:
+        with connection_pool.connect() as conn:
+            node_row = conn.get('''
+                SELECT id, host, port
+                FROM nodes
+                WHERE nodes.host IN (%s)
+                ORDER BY host, port LIMIT 1
+            ''' % ','.join("'%s'" % addr for addr in addresses))
+    except (connection_pool.PoolConnectionException, database.DatabaseError):
+        return None
 
     if node_row is None:
         # we may be the master node, and the dashboard may be pointing at 127.0.0.1
@@ -84,7 +91,7 @@ class Node(object):
     def __init__(self, node_row):
         self.update_from_node(node_row)
         self.alias = None
-        self._pool = ConnectionPool()
+        self._pool = connection_pool.ConnectionPool()
 
     def update_from_node(self, node):
         self.id = node.id
