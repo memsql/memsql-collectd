@@ -1,7 +1,7 @@
 from netifaces import interfaces, ifaddresses, AF_INET
 import re
 import socket
-from memsql.common import connection_pool
+from memsql.common.connection_pool import ConnectionPool, PoolConnectionException
 from memsql.common import database
 
 # Status variables specified in the following array will be sent to
@@ -38,7 +38,7 @@ def find_node_by_name(connection_pool, memsqlnode):
                 WHERE nodes.host = %s AND nodes.port LIKE %s
                 ORDER BY host, port LIMIT 1
             ''', host, port)
-    except (connection_pool.PoolConnectionException, database.DatabaseError):
+    except (PoolConnectionException, database.DatabaseError):
         return None
 
     if node_row is not None:
@@ -60,7 +60,7 @@ def find_node_by_address(connection_pool, possible_hostname=None):
                 WHERE nodes.host IN (%s)
                 ORDER BY host, port LIMIT 1
             ''' % ','.join("'%s'" % addr for addr in addresses))
-    except (connection_pool.PoolConnectionException, database.DatabaseError):
+    except (PoolConnectionException, database.DatabaseError):
         return None
 
     if node_row is None:
@@ -91,7 +91,7 @@ class Node(object):
     def __init__(self, node_row):
         self.update_from_node(node_row)
         self.alias = None
-        self._pool = connection_pool.ConnectionPool()
+        self._pool = ConnectionPool()
 
     def update_from_node(self, node):
         self.id = node.id
