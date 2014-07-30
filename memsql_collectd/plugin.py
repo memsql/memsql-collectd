@@ -454,7 +454,7 @@ def cache_value(new_value, data_source_name, data_source_type, collectd_sample, 
             data.counters.blacklisted
         ))
 
-    classifier = [
+    temp_classifier = [
         data.config.prefix,         # alpha... (None's will be filtered)
         collectd_sample.plugin,
         collectd_sample.plugin_instance,
@@ -462,7 +462,10 @@ def cache_value(new_value, data_source_name, data_source_type, collectd_sample, 
         collectd_sample.type_instance,
         data_source_name,
     ]
-    classifier_str = '.'.join(filter(None, classifier))
+
+    # we do this since '.' could be inside one of the classifier parts (like plugin, plugin_instance, etc)
+    classifier_str = '.'.join(filter(None, temp_classifier))
+    classifier = classifier_str.split('.')
 
     if not _whitelisted(data, classifier_str):
         data.counters.whitelisted += 1
@@ -472,10 +475,14 @@ def cache_value(new_value, data_source_name, data_source_type, collectd_sample, 
         data.counters.blacklisted += 1
         return
 
+    instance_id = collectd_sample.host
+    if instance_id is not None:
+        instance_id = instance_id.replace('.', '_')
+
     new_row = AnalyticsRow(
         int(collectd_sample.time),
         new_value,
-        collectd_sample.host,       # instance_id
+        instance_id,
         *classifier
     )
 

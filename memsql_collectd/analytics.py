@@ -3,10 +3,10 @@ import threading
 import math
 from wraptor.decorators import throttle
 import calendar
-from itertools import repeat, chain, ifilter, islice, tee
+from itertools import repeat, chain, islice, tee, imap, ifilter
 from memsql_collectd import util
 
-CLASSIFIERS = [ "instance_id", "alpha", "beta", "gamma", "delta", "epsilon" ]
+CLASSIFIERS = [ 'instance_id', 'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa', 'lambda', 'mu', 'nu', 'xi', 'omicron' ]
 CLASSIFIER_COLUMNS = CLASSIFIERS + [ "classifier", "id", "last_updated" ]
 
 ANALYTICS_COLUMNS = [ "classifier_id", "created", "value" ]
@@ -17,29 +17,18 @@ def partition(iterator, cb):
         * callback is only executed once per value
         * iterator must be finite, as this is a non-lazy partition function
     """
-    trues, falses = tee(((cb(x), x) for x in iterator), 2)
+    trues, falses = tee(imap(lambda x: (cb(x), x), iterator), 2)
     return [v for r, v in trues if r], [v for r, v in falses if not r]
 
 class AnalyticsRow(object):
     def __init__(self, created, raw_value, *classifier):
         self.created = created
         self.raw_value = raw_value
-        self.instance_id = classifier[0]
 
         self.value = None
         self._classifier_id = None
 
-        self.classifier = tuple(
-            islice(chain(
-                ifilter(None, map(self._parse_val, classifier)),
-                repeat('')
-            ), len(CLASSIFIERS)))
-
-    def _parse_val(self, value):
-        if value:
-            return value.replace('.', '_')
-        else:
-            return None
+        self.classifier = tuple(islice(chain(ifilter(None, classifier), repeat('')), len(CLASSIFIERS)))
 
     @property
     def classifier_id(self):
@@ -72,7 +61,6 @@ class AnalyticsCache(object):
         self._pending = []
         self._seen_classifiers = []
         self._previous_rows = {}
-        self._instance_id = None
 
     def swap_row(self, new_row):
         """ Stores new_row in the cache and returns the previous row
@@ -96,9 +84,6 @@ class AnalyticsCache(object):
             flushing, self._pending = partition(self._pending, lambda r: r.valid())
 
         if len(flushing) > 0:
-            # grab the instance id (they are all the same)
-            self._instance_id = flushing[0].instance_id
-
             self.record_classifiers(agg_pool, flushing)
 
             with agg_pool.connect() as conn:

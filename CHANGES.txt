@@ -1,3 +1,8 @@
+2014-07-30 Version 0.2.4
+
+    * Now supports .'s showing up inside part of a classifier (ie. a . can be inside plugin or
+      plugin_instance)
+
 2014-05-12 Version 0.2.3
 
     * MemSQL specific du/df extensions
