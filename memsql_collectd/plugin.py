@@ -54,6 +54,8 @@ MEMSQL_DATA.config = _AttrDict(
     dfblacklist=True,
     derive=True,
     clusterhostname=None,
+    skipdiskusage=False,
+    skipcolumnardiskusage=False,
 )
 
 ###################################
@@ -307,6 +309,9 @@ class DiskUsageWorker(threading.Thread):
         return out
 
     def run(self):
+        if self.data.config.skipdiskusage:
+            return
+
         while not self._stop.isSet():
             time.sleep(5)
 
@@ -317,6 +322,9 @@ class DiskUsageWorker(threading.Thread):
                 disk_usage = copy.deepcopy(self._disk_usage)
 
             for label, info in disk_usage.iteritems():
+                if self.data.config.skipcolumnardiskusage and label == "segments":
+                    continue
+
                 try:
                     with open(os.devnull, 'w') as devnull:
                         p = subprocess.Popen(['du', '-k', '-s', info['path']], stderr=devnull, stdout=subprocess.PIPE)
