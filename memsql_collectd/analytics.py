@@ -6,6 +6,7 @@ import calendar
 from itertools import repeat, chain, islice, tee, imap, ifilter
 from memsql_collectd import util
 
+CLASSIFIER_MIN_HASH_LEN = 6
 CLASSIFIERS = [ 'instance_id', 'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa', 'lambda', 'mu', 'nu', 'xi', 'omicron' ]
 CLASSIFIER_COLUMNS = CLASSIFIERS + [ "classifier", "id", "last_updated" ]
 
@@ -33,7 +34,11 @@ class AnalyticsRow(object):
     @property
     def classifier_id(self):
         if self._classifier_id is None:
-            self._classifier_id = util.hash_64_bit(*self.classifier)
+            parts = [x for x in self.classifier if x != '']
+            if len(parts) < CLASSIFIER_MIN_HASH_LEN:
+                diff = CLASSIFIER_MIN_HASH_LEN - len(parts)
+                parts = parts + ([''] * diff)
+            self._classifier_id = util.hash_64_bit(*parts)
         return self._classifier_id
 
     @property
