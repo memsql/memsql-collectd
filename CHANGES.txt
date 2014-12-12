@@ -1,3 +1,7 @@
+2014-12-11 Version 0.2.6
+
+    * Fixed the hash function which produces classifier_ids so it matches up exactly with the one before 0.2.4
+
 2014-10-27 Version 0.2.5
 
     * Added the option to disable the usage of du to scan MemSQL disk usage
