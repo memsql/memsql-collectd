@@ -1,4 +1,5 @@
-# This project is deprecated.  No support will be offered for this plugin.
+This project is deprecated.  No support will be offered for this plugin.
+====
 
 ===========
 MemSQL Collectd Plugin
